@@ -292,7 +292,7 @@ function M.setup_all_keymaps(tabpage, original_bufnr, modified_bufnr, is_explore
         return
       end
     elseif is_virtual then
-      local original, modified = lifecycle.get_paths(tabpage)
+      local original, modified = lifecycle.get_path_refs(tabpage)
       local ref = side == "original" and original or modified
       if not ref or ref.absolute == "" then
         vim.notify("Buffer has no associated file path", vim.log.levels.WARN)

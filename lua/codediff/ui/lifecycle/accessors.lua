@@ -73,9 +73,38 @@ function M.get_windows(tabpage)
   return sess.original_win, sess.modified_win
 end
 
---- Get path refs
----@return Path? original, Path? modified
+--- Get path strings (pre-2.50 contract, kept for external integrations
+--- like review.nvim that feed the result into string APIs such as
+--- vim.filetype.match). Internal callers that need the typed refs use
+--- get_path_refs below.
+---@return string? original, string? modified
 function M.get_paths(tabpage)
+  local active_diffs = get_active_diffs()
+  local sess = active_diffs[tabpage]
+  if not sess then
+    return nil, nil
+  end
+  local function to_string(ref)
+    if not ref then
+      return nil
+    end
+    if type(ref) == "string" then
+      return ref
+    end
+    if ref.absolute and ref.absolute ~= "" then
+      return ref.absolute
+    end
+    if ref.relative and ref.relative ~= "" then
+      return ref.relative
+    end
+    return nil
+  end
+  return to_string(sess.original), to_string(sess.modified)
+end
+
+--- Get typed path refs
+---@return Path? original, Path? modified
+function M.get_path_refs(tabpage)
   local active_diffs = get_active_diffs()
   local sess = active_diffs[tabpage]
   if not sess then

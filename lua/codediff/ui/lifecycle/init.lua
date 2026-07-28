@@ -35,6 +35,7 @@ M.get_git_context = accessors.get_git_context
 M.get_buffers = accessors.get_buffers
 M.get_windows = accessors.get_windows
 M.get_paths = accessors.get_paths
+M.get_path_refs = accessors.get_path_refs
 M.find_tabpage_by_buffer = accessors.find_tabpage_by_buffer
 M.is_original_virtual = accessors.is_original_virtual
 M.is_modified_virtual = accessors.is_modified_virtual
