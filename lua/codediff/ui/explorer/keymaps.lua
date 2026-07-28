@@ -172,6 +172,19 @@ function M.setup(explorer)
     end, vim.tbl_extend("force", map_options, { buffer = split.bufnr, desc = "Toggle Staged Changes visibility" }))
   end
 
+  -- Toggle viewed-mark for the file under the cursor (m key)
+  if explorer_keymaps.toggle_mark then
+    vim.keymap.set("n", explorer_keymaps.toggle_mark, function()
+      local node = tree:get_node()
+      if not node or not node.data or node.data.type == "group" or node.data.type == "directory" then
+        return
+      end
+      if node.data.path then
+        require("codediff.marks").toggle(node.data.path, { tabpage = explorer.tabpage })
+      end
+    end, vim.tbl_extend("force", map_options, { buffer = split.bufnr, desc = "Toggle viewed mark" }))
+  end
+
   -- Fold keymaps (Vim-style: zo/zO/zc/zC/za/zA/zR/zM)
   tree_utils.setup_fold_keymaps({
     tree = tree,

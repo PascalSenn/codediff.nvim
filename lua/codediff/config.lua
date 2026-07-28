@@ -78,6 +78,10 @@ M.defaults = {
       unstaged = true,
       conflicts = true,
     },
+    marks = { -- Viewed-mark checkmarks (dormant until require("codediff.marks") activates a session)
+      marked_sign = "✓",
+      unmarked_sign = "□",
+    },
   },
 
   -- History panel configuration (for :CodeDiff history)
@@ -123,6 +127,7 @@ M.defaults = {
       restore = "X", -- Discard changes to file (restore to index/HEAD)
       toggle_changes = "gu", -- Toggle Changes (unstaged) group visibility
       toggle_staged = "gs", -- Toggle Staged Changes group visibility
+      toggle_mark = "m", -- Toggle viewed-mark for the file under the cursor
       -- Fold keymaps (Vim-style)
       fold_open = "zo", -- Open fold (expand current node)
       fold_open_recursive = "zO", -- Open fold recursively (expand current node and all descendants)

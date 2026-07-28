@@ -122,7 +122,7 @@ function M.create(status_result, git_root, tabpage, width, base_revision, target
       if split.winid and vim.api.nvim_win_is_valid(split.winid) then
         current_width = vim.api.nvim_win_get_width(split.winid)
       end
-      return nodes_module.prepare_node(node, current_width, selected_path, selected_group)
+      return nodes_module.prepare_node(node, current_width, selected_path, selected_group, tabpage)
     end,
   })
 

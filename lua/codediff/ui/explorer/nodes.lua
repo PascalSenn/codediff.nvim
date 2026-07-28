@@ -242,10 +242,12 @@ function M.create_tree_file_nodes(files, git_root, group)
 end
 
 -- Prepare node for rendering (format display)
-function M.prepare_node(node, max_width, selected_path, selected_group)
+function M.prepare_node(node, max_width, selected_path, selected_group, tabpage)
   local line = Line()
   local data = node.data or {}
   local explorer_config = config.options.explorer or {}
+  local marks = require("codediff.marks")
+  local marks_active = tabpage ~= nil and marks.is_active(tabpage)
   local use_indent_markers = explorer_config.indent_markers ~= false -- default true
 
   -- Helper to build indent string with markers (for tree mode)
@@ -342,6 +344,16 @@ function M.prepare_node(node, max_width, selected_path, selected_group)
       line:append(icon_part, get_hl(data.icon_color))
     end
 
+    -- Viewed-mark slot (only when marks are active for this session)
+    local mark_part = ""
+    if marks_active then
+      local marks_config = explorer_config.marks or {}
+      local is_marked = data.path and marks.is_marked(data.path, tabpage)
+      local sign = is_marked and (marks_config.marked_sign or "✓") or (marks_config.unmarked_sign or "□")
+      mark_part = sign .. " "
+      line:append(mark_part, get_hl(is_marked and "CodeDiffMarkViewed" or "CodeDiffMarkUnviewed"))
+    end
+
     -- Status symbol at the end (e.g., "M", "D", "??")
     local status_symbol = data.status_symbol or ""
 
@@ -353,7 +365,7 @@ function M.prepare_node(node, max_width, selected_path, selected_group)
 
     -- Calculate how much width we've used and reserve for status
     local status_margin = config.options.explorer.status_right_margin or 1
-    local used_width = vim.fn.strdisplaywidth(indent) + vim.fn.strdisplaywidth(icon_part)
+    local used_width = vim.fn.strdisplaywidth(indent) + vim.fn.strdisplaywidth(icon_part) + vim.fn.strdisplaywidth(mark_part)
     -- Reserve = symbol + 2 cells of minimum gap from content + configurable trailing margin
     local status_reserve = vim.fn.strdisplaywidth(status_symbol) + 2 + status_margin
     local available_for_content = max_width - used_width - status_reserve
