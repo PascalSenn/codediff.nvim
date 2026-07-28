@@ -175,9 +175,60 @@ function M.clear(opts)
   notify(tabpage, changed, opts)
 end
 
+---Aggregate mark state of a directory node's descendant files.
+---Walks the explorer tree, so it only works during/after a render of the
+---explorer that owns the node.
+---@param node table nui tree directory node
+---@param tabpage integer
+---@return "all"|"some"|"none"
+function M.dir_state(node, tabpage)
+  local s = state[tabpage]
+  if not s then
+    return "none"
+  end
+  local ok, lifecycle = pcall(require, "codediff.ui.lifecycle")
+  if not ok then
+    return "none"
+  end
+  local explorer = lifecycle.get_explorer(tabpage)
+  if not explorer or not explorer.tree then
+    return "none"
+  end
+  local tree = explorer.tree
+  local total, marked = 0, 0
+  local function walk(n)
+    if not n:has_children() then
+      return
+    end
+    for _, id in ipairs(n:get_child_ids()) do
+      local child = tree:get_node(id)
+      if child then
+        local d = child.data or {}
+        if d.type == "directory" then
+          walk(child)
+        elseif d.path then
+          total = total + 1
+          if s.marked[d.path] then
+            marked = marked + 1
+          end
+        end
+      end
+    end
+  end
+  walk(node)
+  if total == 0 or marked == 0 then
+    return "none"
+  end
+  if marked == total then
+    return "all"
+  end
+  return "some"
+end
+
 -- Default highlights; user overrides win because of `default = true`.
 vim.api.nvim_set_hl(0, "CodeDiffMarkViewed", { default = true, link = "DiffAdd" })
 vim.api.nvim_set_hl(0, "CodeDiffMarkUnviewed", { default = true, link = "Comment" })
+vim.api.nvim_set_hl(0, "CodeDiffMarkPartial", { default = true, link = "DiffChange" })
 
 -- Drop state when the codediff session for a tabpage closes.
 vim.api.nvim_create_autocmd("User", {

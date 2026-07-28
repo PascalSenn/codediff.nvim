@@ -293,6 +293,20 @@ function M.prepare_node(node, max_width, selected_path, selected_group, tabpage)
       line:append(indent, use_indent_markers and "NeoTreeIndentMarker" or "Normal")
     end
     line:append(folder_icon .. " ", folder_color or "Directory")
+    -- Aggregate viewed-mark: ✓ all descendants marked, ▣ some, □ none
+    if marks_active then
+      local marks_config = explorer_config.marks or {}
+      local dir_state = marks.dir_state(node, tabpage)
+      local sign, hl
+      if dir_state == "all" then
+        sign, hl = marks_config.marked_sign or "✓", "CodeDiffMarkViewed"
+      elseif dir_state == "some" then
+        sign, hl = marks_config.partial_sign or "▣", "CodeDiffMarkPartial"
+      else
+        sign, hl = marks_config.unmarked_sign or "□", "CodeDiffMarkUnviewed"
+      end
+      line:append(sign .. " ", hl)
+    end
     line:append(data.name, "Directory")
   else
     -- Match both path AND group to handle files in both staged and unstaged

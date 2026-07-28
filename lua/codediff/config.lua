@@ -81,6 +81,7 @@ M.defaults = {
     marks = { -- Viewed-mark checkmarks (dormant until require("codediff.marks") activates a session)
       marked_sign = "✓",
       unmarked_sign = "□",
+      partial_sign = "▣", -- Directories where only some descendants are marked
     },
   },
 
