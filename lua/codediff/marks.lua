@@ -175,27 +175,23 @@ function M.clear(opts)
   notify(tabpage, changed, opts)
 end
 
----Aggregate mark state of a directory node's descendant files.
+---Descendant file paths of a directory node, in tree order.
 ---Walks the explorer tree, so it only works during/after a render of the
 ---explorer that owns the node.
 ---@param node table nui tree directory node
 ---@param tabpage integer
----@return "all"|"some"|"none"
-function M.dir_state(node, tabpage)
-  local s = state[tabpage]
-  if not s then
-    return "none"
-  end
+---@return string[]
+function M.dir_files(node, tabpage)
   local ok, lifecycle = pcall(require, "codediff.ui.lifecycle")
   if not ok then
-    return "none"
+    return {}
   end
-  local explorer = lifecycle.get_explorer(tabpage)
+  local explorer = lifecycle.get_explorer(tp_or_current(tabpage))
   if not explorer or not explorer.tree then
-    return "none"
+    return {}
   end
   local tree = explorer.tree
-  local total, marked = 0, 0
+  local paths = {}
   local function walk(n)
     if not n:has_children() then
       return
@@ -207,19 +203,37 @@ function M.dir_state(node, tabpage)
         if d.type == "directory" then
           walk(child)
         elseif d.path then
-          total = total + 1
-          if s.marked[d.path] then
-            marked = marked + 1
-          end
+          paths[#paths + 1] = d.path
         end
       end
     end
   end
   walk(node)
-  if total == 0 or marked == 0 then
+  return paths
+end
+
+---Aggregate mark state of a directory node's descendant files.
+---Walks the explorer tree, so it only works during/after a render of the
+---explorer that owns the node.
+---@param node table nui tree directory node
+---@param tabpage integer
+---@return "all"|"some"|"none"
+function M.dir_state(node, tabpage)
+  local s = state[tp_or_current(tabpage)]
+  if not s then
     return "none"
   end
-  if marked == total then
+  local files = M.dir_files(node, tabpage)
+  local marked = 0
+  for _, p in ipairs(files) do
+    if s.marked[p] then
+      marked = marked + 1
+    end
+  end
+  if #files == 0 or marked == 0 then
+    return "none"
+  end
+  if marked == #files then
     return "all"
   end
   return "some"

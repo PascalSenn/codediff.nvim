@@ -172,17 +172,39 @@ function M.setup(explorer)
     end, vim.tbl_extend("force", map_options, { buffer = split.bufnr, desc = "Toggle Staged Changes visibility" }))
   end
 
-  -- Toggle viewed-mark for the file under the cursor (m key)
+  -- Toggle viewed-mark for the file, or all files of the directory, under
+  -- the cursor (m key)
   if explorer_keymaps.toggle_mark then
     vim.keymap.set("n", explorer_keymaps.toggle_mark, function()
       local node = tree:get_node()
-      if not node or not node.data or node.data.type == "group" or node.data.type == "directory" then
+      if not node or not node.data or node.data.type == "group" then
+        return
+      end
+      local marks = require("codediff.marks")
+      if node.data.type == "directory" then
+        -- Bulk-apply via one marks.set call: a single CodeDiffMarksChanged
+        -- event, so remote syncers see the whole folder as one batch.
+        local tabpage = explorer.tabpage
+        local files = marks.dir_files(node, tabpage)
+        if #files == 0 then
+          return
+        end
+        -- Fully marked -> unmark all; otherwise mark all.
+        local target = marks.dir_state(node, tabpage) ~= "all"
+        local want = {}
+        for _, p in ipairs(marks.get(tabpage)) do
+          want[p] = true
+        end
+        for _, p in ipairs(files) do
+          want[p] = target or nil
+        end
+        marks.set(vim.tbl_keys(want), { tabpage = tabpage })
         return
       end
       if node.data.path then
-        require("codediff.marks").toggle(node.data.path, { tabpage = explorer.tabpage })
+        marks.toggle(node.data.path, { tabpage = explorer.tabpage })
       end
-    end, vim.tbl_extend("force", map_options, { buffer = split.bufnr, desc = "Toggle viewed mark" }))
+    end, vim.tbl_extend("force", map_options, { buffer = split.bufnr, desc = "Toggle viewed mark (file or folder)" }))
   end
 
   -- Fold keymaps (Vim-style: zo/zO/zc/zC/za/zA/zR/zM)
