@@ -221,7 +221,11 @@ local function apply_folds(session)
       vim.wo[entry.win].foldexpr = "v:lua.require'codediff.ui.view.compact'.foldexpr_eval()"
       vim.wo[entry.win].foldenable = true
       vim.wo[entry.win].foldlevel = 0
-      vim.wo[entry.win].foldminlines = 1
+      -- scope="local": a bare vim.wo assignment also writes the global value,
+      -- and nvim's OptionSet handler for foldminlines reacts to a global set
+      -- by rebuilding treesitter fold state for every buffer it ever tracked,
+      -- including wiped codediff virtual buffers (get_parser: Invalid buffer).
+      vim.api.nvim_set_option_value("foldminlines", 1, { scope = "local", win = entry.win })
     end
   end
   setup_fold_sync(session)
@@ -284,7 +288,8 @@ function M.disable(tabpage)
       vim.wo[win].foldmethod = fold_state.foldmethod
       vim.wo[win].foldexpr = fold_state.foldexpr
       vim.wo[win].foldlevel = fold_state.foldlevel
-      vim.wo[win].foldminlines = fold_state.foldminlines
+      -- scope="local" for the same reason as in apply_folds.
+      vim.api.nvim_set_option_value("foldminlines", fold_state.foldminlines, { scope = "local", win = win })
       vim.wo[win].foldenable = fold_state.foldenable
       vim.wo[win].foldtext = fold_state.foldtext
     end
