@@ -451,6 +451,11 @@ function M.setup_all_keymaps(tabpage, original_bufnr, modified_bufnr, is_explore
         return
       end
       vim.notify(string.format("Staged hunk %d", hunk_idx), vim.log.levels.INFO)
+      -- Advance to the next hunk (crosses file boundaries when
+      -- diff.cycle_hunks_across_files is enabled). Runs before the git
+      -- watcher refresh, so the pre-stage diff result still lists the
+      -- staged hunk and the jump lands on the one after it.
+      require("codediff.ui.view.navigation").next_hunk()
     end)
   end
 
