@@ -26,6 +26,7 @@ https://github.com/user-attachments/assets/64c41f01-dffe-4318-bce4-16eec8de356e
 - **Side-by-side diff view** in a new tab with synchronized scrolling
 - **Inline (unified) diff view** — single-window layout with deleted lines as virtual overlays, with treesitter syntax highlighting
 - **Toggle layout** — switch between side-by-side and inline layout at runtime with `t`
+- **Patch view** — every changed file's hunks in one scrollable buffer next to the explorer, toggled with `gp` (explorer mode)
 - **Git integration**: Compare between any git revision (HEAD, commits, branches, tags)
 - **Same implementation as VSCode's diff engine**, providing identical visual highlighting for most scenarios
 - **Fast C-based diff computation** using FFI with **multi-core parallelization** (OpenMP)
@@ -168,6 +169,7 @@ https://github.com/user-attachments/assets/64c41f01-dffe-4318-bce4-16eec8de356e
         align_move = "gm", -- Temporarily align moved code blocks across panes
         toggle_layout = "t", -- Toggle between side-by-side and inline layout
         toggle_compact = "gc", -- Toggle compact mode (fold unchanged regions)
+        toggle_patch = "gp", -- Toggle patch view (all files' hunks in one buffer, explorer mode)
       },
       explorer = {
         select = "<CR>",    -- Open diff for selected file
@@ -340,6 +342,19 @@ Show only changes introduced since branching from a base branch—exactly like a
 ```
 
 This uses `git merge-base` semantics (equivalent to `git diff main...HEAD`), showing only the changes introduced on your branch, not changes that happened on the base branch since you branched.
+
+#### Patch View
+
+Press `gp` in any explorer session to see every file's changes at once. The diff window turns into one read-only buffer that lists each file (in explorer order) as a header followed by its hunks with a few context lines (`diff.compact_context_lines`), rendered with the usual line and character highlights plus treesitter syntax colors. Untracked and deleted files show their whole content; merge conflicts and binary files show a note instead.
+
+- Scroll freely: the cursor's file is selected in the explorer as you move.
+- `<CR>` in the explorer jumps to that file's section; `]f`/`[f` do the same.
+- `]c`/`[c` walk the hunks of the whole patch; `ih` selects the hunk under the cursor.
+- `<CR>` on a hunk leaves the patch view and opens that file's regular diff at the same line; `gf` opens the working-tree file in the previous tab.
+- `-` stages/unstages the file under the cursor; the patch rebuilds when the explorer refreshes.
+- `gp` again goes back to the per-file diff in the layout you had before.
+
+Hunk staging/discard, `do`/`dp`, the layout toggle and compact mode are per-file features and are not available while the patch view is shown. Headers use `CodeDiffPatchHeader`, hunk markers `CodeDiffPatchHunk`, notes `CodeDiffPatchNote`.
 
 ### Git Diff Mode
 
@@ -616,6 +631,9 @@ The plugin defines highlight groups matching VSCode's diff colors:
 - `CodeDiffFiller` - Gray foreground for non-empty filler line patterns
 - `CodeDiffLineMove` - Background for moved code lines (derived from DiffChange)
 - `CodeDiffMoveTo` - Sign column and annotation color for move indicators
+- `CodeDiffPatchHeader` - File header lines in the patch view (links to Title)
+- `CodeDiffPatchHunk` - `@@` hunk markers in the patch view (links to Special)
+- `CodeDiffPatchNote` - Notes such as "binary file" in the patch view (links to Comment)
 
 <details open>
 <summary><b>📸 Visual Examples</b> (click to collapse)</summary>

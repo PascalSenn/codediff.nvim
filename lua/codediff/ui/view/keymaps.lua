@@ -627,6 +627,11 @@ function M.setup_all_keymaps(tabpage, original_bufnr, modified_bufnr, is_explore
       compact.toggle(tabpage)
     end, { desc = "Toggle compact mode" })
   end
+  if is_explorer_mode and keymaps.toggle_patch then
+    lifecycle.set_tab_keymap(tabpage, "n", keymaps.toggle_patch, function()
+      require("codediff.ui.view.patch").toggle(tabpage)
+    end, { desc = "Toggle patch view (all files in one buffer)" })
+  end
 
   -- Toggle stage/unstage (- key) - only in explorer mode
   -- Support legacy config: keymaps.explorer.toggle_stage (deprecated)

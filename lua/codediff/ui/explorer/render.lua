@@ -28,6 +28,13 @@ local function show_welcome_page(explorer)
     return false
   end
 
+  -- Patch view: stays up (rebuilt) while files remain; otherwise it steps
+  -- aside and the welcome page takes the window as usual.
+  local patch = require("codediff.ui.view.patch")
+  if patch.is_active(explorer.tabpage) and patch.on_welcome_page(explorer.tabpage) then
+    return true
+  end
+
   local mod_win = session.modified_win
   if not mod_win or not vim.api.nvim_win_is_valid(mod_win) then
     return false
@@ -198,6 +205,16 @@ function M.create(status_result, git_root, tabpage, width, base_revision, target
     local view = require("codediff.ui.view")
     local lifecycle = require("codediff.ui.lifecycle")
 
+    -- Deferred work is dropped when the patch view has taken the diff window
+    -- in the meantime (it owns the window until it is toggled off).
+    local function schedule(fn)
+      vim.schedule(function()
+        if not require("codediff.ui.view.patch").is_active(tabpage) then
+          fn()
+        end
+      end)
+    end
+
     local file_path = file_data.path
     local old_path = file_data.old_path -- For renames: path in original revision
     local group = file_data.group or "unstaged"
@@ -232,7 +249,7 @@ function M.create(status_result, git_root, tabpage, width, base_revision, target
         return
       end
 
-      vim.schedule(function()
+      schedule(function()
         ---@type SessionConfig
         local session_config = {
           mode = "explorer",
@@ -251,7 +268,7 @@ function M.create(status_result, git_root, tabpage, width, base_revision, target
 
     -- Handle untracked files: show file without diff
     if file_data.status == "??" then
-      vim.schedule(function()
+      schedule(function()
         local sess = lifecycle.get_session(tabpage)
         if sess and sess.layout == "inline" then
           require("codediff.ui.view.inline_view").show_single_file(tabpage, abs_path, {
@@ -266,7 +283,7 @@ function M.create(status_result, git_root, tabpage, width, base_revision, target
 
     -- Handle added files: only one side has the file
     if file_data.status == "A" then
-      vim.schedule(function()
+      schedule(function()
         local sess = lifecycle.get_session(tabpage)
         local is_inline = sess and sess.layout == "inline"
 
@@ -307,7 +324,7 @@ function M.create(status_result, git_root, tabpage, width, base_revision, target
 
     -- Handle deleted files: show old content without diff
     if file_data.status == "D" then
-      vim.schedule(function()
+      schedule(function()
         local sess = lifecycle.get_session(tabpage)
         local is_inline = sess and sess.layout == "inline"
 
@@ -394,7 +411,7 @@ function M.create(status_result, git_root, tabpage, width, base_revision, target
 
     if base_revision and target_revision and target_revision ~= "WORKING" then
       -- Two revision mode: Compare base vs target
-      vim.schedule(function()
+      schedule(function()
         ---@type SessionConfig
         local session_config = {
           mode = "explorer",
@@ -413,7 +430,7 @@ function M.create(status_result, git_root, tabpage, width, base_revision, target
     local target_revision_single = base_revision or "HEAD"
     git.resolve_revision(target_revision_single, git_root, function(err_resolve, commit_hash)
       if err_resolve then
-        vim.schedule(function()
+        schedule(function()
           vim.notify(err_resolve, vim.log.levels.ERROR)
         end)
         return
@@ -421,7 +438,7 @@ function M.create(status_result, git_root, tabpage, width, base_revision, target
 
       if base_revision then
         -- Revision mode: Simple comparison of working tree vs base_revision
-        vim.schedule(function()
+        schedule(function()
           ---@type SessionConfig
           local session_config = {
             mode = "explorer",
@@ -436,7 +453,7 @@ function M.create(status_result, git_root, tabpage, width, base_revision, target
       elseif group == "conflicts" then
         -- Merge conflict: Show incoming (:3) vs current (:2), both diffed against base (:1)
         -- Position controlled by config.diff.conflict_ours_position (absolute screen position)
-        vim.schedule(function()
+        schedule(function()
           -- Determine conflict buffer positions based on config
           -- conflict_ours_position controls where :2 (OURS) appears on screen
           local ours_position = config.options.diff.conflict_ours_position or "right"
@@ -469,7 +486,7 @@ function M.create(status_result, git_root, tabpage, width, base_revision, target
         -- Staged changes: Compare staged (:0) vs HEAD (both virtual)
         -- For renames: old_path in HEAD, new path in staging
         -- No pre-fetching needed, virtual files will load via BufReadCmd
-        vim.schedule(function()
+        schedule(function()
           ---@type SessionConfig
           local session_config = {
             mode = "explorer",
@@ -497,7 +514,7 @@ function M.create(status_result, git_root, tabpage, width, base_revision, target
         local original_revision = is_staged and ":0" or commit_hash
 
         -- No pre-fetching needed, buffers will load content
-        vim.schedule(function()
+        schedule(function()
           ---@type SessionConfig
           local session_config = {
             mode = "explorer",
@@ -513,14 +530,25 @@ function M.create(status_result, git_root, tabpage, width, base_revision, target
     end)
   end
 
-  -- Wrap on_file_select to track current file and group
-  explorer.on_file_select = function(file_data, opts)
+  -- Track the current file and highlight it in the tree without opening it
+  -- (the patch view's cursor-follow uses this).
+  explorer.set_current = function(file_data)
     explorer.current_file_path = file_data.path
     explorer.current_file_group = file_data.group
     explorer.current_selection = vim.deepcopy(file_data)
     selected_path = file_data.path
     selected_group = file_data.group
     tree:render()
+  end
+
+  -- Wrap on_file_select to track current file and group
+  explorer.on_file_select = function(file_data, opts)
+    explorer.set_current(file_data)
+    -- Patch view: the file is a section of the patch buffer, not a diff pane.
+    local patch = require("codediff.ui.view.patch")
+    if patch.is_active(tabpage) then
+      return patch.select(tabpage, file_data, opts)
+    end
     on_file_select(file_data, opts)
   end
 

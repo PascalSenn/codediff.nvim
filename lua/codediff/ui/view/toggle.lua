@@ -126,4 +126,9 @@ function M.toggle(tabpage)
   return true
 end
 
+-- Exposed for the patch view, which needs the single-window inline layout
+-- while active and the previous layout back afterwards.
+M.normalize_inline_layout = normalize_inline_layout
+M.normalize_side_by_side_layout = normalize_side_by_side_layout
+
 return M

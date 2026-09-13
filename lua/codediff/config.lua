@@ -116,6 +116,7 @@ M.defaults = {
       align_move = "gm", -- Temporarily align other pane to show paired moved code
       toggle_layout = "t", -- Toggle diff layout for the current codediff session
       toggle_compact = "gc", -- Toggle compact mode (fold unchanged regions, show only hunks + context)
+      toggle_patch = "gp", -- Toggle the patch view: every file's hunks in one buffer (explorer mode only)
       show_help = "g?", -- Show floating window with available keymaps
     },
     explorer = {

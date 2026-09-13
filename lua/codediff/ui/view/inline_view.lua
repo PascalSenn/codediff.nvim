@@ -77,7 +77,11 @@ local function compute_and_render_inline(
         session.pending_cursor_landing = nil
       end
 
+      -- A number is an explicit modified-side line (patch view drill-in).
       local target_line = landing == "last" and lines_diff.changes[#lines_diff.changes].modified.start_line or lines_diff.changes[1].modified.start_line
+      if type(landing) == "number" then
+        target_line = landing
+      end
       pcall(vim.api.nvim_win_set_cursor, modified_win, { target_line, 0 })
       vim.api.nvim_set_current_win(modified_win)
       vim.cmd("normal! zz")

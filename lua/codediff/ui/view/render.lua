@@ -128,6 +128,11 @@ function M.compute_and_render(
         end
         orig_cursor = { target_line, 0 }
         mod_cursor = { target_line, 0 }
+      elseif type(landing) == "number" then
+        -- Explicit modified-side line (patch view drill-in).
+        local compact = require("codediff.ui.view.compact")
+        orig_cursor = { compact.compute_corresponding_lnum(lines_diff.changes, "modified", "original", landing), 0 }
+        mod_cursor = { landing, 0 }
       else
         local hunk = landing == "last" and lines_diff.changes[#lines_diff.changes] or lines_diff.changes[1]
         orig_cursor = { hunk.original.start_line, 0 }

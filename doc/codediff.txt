@@ -190,6 +190,36 @@ The toggle keymap can be customized:
   })
 <
 
+PATCH VIEW                                          *codediff-patch-view*
+
+Press `gp` in an explorer session to show every file's changes in one
+read-only buffer: each file (in explorer order) as a header line followed by
+its hunks with `diff.compact_context_lines` lines of context, with the usual
+line/character highlights and treesitter syntax colors. Untracked and deleted
+files show their whole content; merge conflicts and binary files show a note.
+
+While the patch view is shown:
+- moving the cursor selects the file under it in the explorer
+- <CR> in the explorer (and ]f / [f) jumps to that file's section
+- ]c / [c walk the hunks of the whole patch, `ih` selects the hunk at the cursor
+- <CR> on a hunk opens that file's regular diff at the same line, `gf` opens
+  the working-tree file in the previous tab
+- `-` stages/unstages the file under the cursor; the buffer rebuilds whenever
+  the explorer refreshes
+- `gp` returns to the per-file diff in the previous layout
+
+Hunk staging/discard, do/dp, the layout toggle and compact mode are per-file
+features and are unavailable in the patch view. The keymap:
+>lua
+  require("codediff").setup({
+    keymaps = {
+      view = {
+        toggle_patch = "gp",  -- or false to disable
+      },
+    },
+  })
+<
+
 Setup entry point:
 >lua
   require("codediff").setup({
@@ -265,6 +295,7 @@ Setup entry point:
         align_move = "gm",
         toggle_layout = "t",
         toggle_compact = "gc",
+        toggle_patch = "gp",
       },
       explorer = {
         select = "<CR>",
@@ -328,6 +359,9 @@ CodeDiff defines highlight groups matching VSCode's diff colors:
 - CodeDiffHelpKey - key bindings in keymap help (links to Special)
 - CodeDiffHelpSep - separators in keymap help (links to NonText)
 - CodeDiffHelpDesc - descriptions in keymap help (links to Normal)
+- CodeDiffPatchHeader - file header lines in the patch view (links to Title)
+- CodeDiffPatchHunk - @@ hunk markers in the patch view (links to Special)
+- CodeDiffPatchNote - notes such as "binary file" in the patch view (links to Comment)
 
 Default behavior:
 - Uses DiffAdd and DiffDelete for line-level highlights
