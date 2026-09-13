@@ -421,6 +421,33 @@ function M.setup_all_keymaps(tabpage, original_bufnr, modified_bufnr, is_explore
 
     local hunk, hunk_idx = find_hunk_at_cursor()
     if not hunk then
+      -- Fully added/untracked files have no hunk list; stage the whole file
+      -- and advance, mirroring the per-hunk flow.
+      local diff_result = session.stored_diff_result
+      local no_hunks = not diff_result or not diff_result.changes or #diff_result.changes == 0
+      local explorer = lifecycle.get_explorer(tabpage)
+      -- current_file_group is nil for programmatic selects; fall back to
+      -- membership in the unstaged status list.
+      local unstaged = explorer and explorer.current_file_group == "unstaged"
+      if explorer and explorer.current_file_group == nil and explorer.current_file_path then
+        for _, f in ipairs((explorer.status_result and explorer.status_result.unstaged) or {}) do
+          if f.path == explorer.current_file_path then
+            unstaged = true
+            break
+          end
+        end
+      end
+      if no_hunks and explorer and explorer.current_file_path and unstaged then
+        local explorer_module = require("codediff.ui.explorer")
+        if explorer_module.toggle_stage_file(session.git_root, explorer.current_file_path, "unstaged") then
+          vim.notify("Staged " .. explorer.current_file_path, vim.log.levels.INFO)
+          local nav = require("codediff.ui.view.navigation")
+          if not nav.next_hunk() then
+            nav.next_file()
+          end
+          return
+        end
+      end
       vim.notify("No hunk at cursor position", vim.log.levels.WARN)
       return
     end
