@@ -28,6 +28,11 @@
 --
 local M = {}
 
+-- Virtual documents currently didOpen-ed on a server, keyed "clientid:uri".
+-- Guards against duplicate didOpen (crashes Roslyn); entries are removed by
+-- close_virtual_doc so a later session can re-open the same revision.
+local open_docs = {}
+
 local api = vim.api
 local bit = require("bit")
 local compat = require("codediff.core.compat")
@@ -193,17 +198,25 @@ function M.apply_semantic_tokens(left_buf, right_buf)
   -- Get language ID from right buffer's filetype
   local language_id = vim.bo[right_buf].filetype or "text"
 
-  -- First, notify LSP about this virtual file via textDocument/didOpen
-  local didopen_params = {
-    textDocument = {
-      uri = left_uri,
-      languageId = language_id,
-      version = 1,
-      text = left_text,
-    },
-  }
+  -- First, notify LSP about this virtual file via textDocument/didOpen.
+  -- Only once per (client, uri): re-renders of the same file would repeat
+  -- the didOpen, and Roslyn treats a duplicate didOpen as a fatal contract
+  -- violation that crashes the whole server process. The URI addresses an
+  -- immutable git revision, so the first didOpen's content stays correct.
+  local key = client.id .. ":" .. left_uri
+  if not open_docs[key] then
+    local didopen_params = {
+      textDocument = {
+        uri = left_uri,
+        languageId = language_id,
+        version = 1,
+        text = left_text,
+      },
+    }
 
-  compat.lsp_notify(client, "textDocument/didOpen", didopen_params)
+    compat.lsp_notify(client, "textDocument/didOpen", didopen_params)
+    open_docs[key] = true
+  end
 
   -- Now request semantic tokens for this file
   local params = {
@@ -248,6 +261,17 @@ function M.apply_semantic_tokens(left_buf, right_buf)
   end, left_buf)
 
   return true
+end
+
+--- Close a virtual document previously didOpen-ed by apply_semantic_tokens
+--- and forget it, so the next session can re-open the same revision.
+---@param client table LSP client
+---@param uri string codediff:// URI
+function M.close_virtual_doc(client, uri)
+  open_docs[client.id .. ":" .. uri] = nil
+  compat.lsp_notify(client, "textDocument/didClose", {
+    textDocument = { uri = uri },
+  })
 end
 
 --- Clear semantic token highlights from buffer
