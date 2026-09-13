@@ -30,6 +30,20 @@ local setup_auto_refresh = render.setup_auto_refresh
 local setup_conflict_result_window = conflict_window.setup_conflict_result_window
 local setup_all_keymaps = view_keymaps.setup_all_keymaps
 
+-- Load a real file from disk, return bufnr. Diff-display buffers skip the
+-- swapfile machinery: an existing (possibly stale) swap file would raise
+-- E325 ATTENTION inside a scheduled render callback and block the editor,
+-- and a killed session would strand one swap file per viewed file. Already
+-- loaded buffers are left untouched so an open buffer keeps its swap file.
+local function load_real_file(file_path)
+  local bufnr = vim.fn.bufadd(file_path)
+  if vim.fn.bufloaded(bufnr) == 0 then
+    vim.bo[bufnr].swapfile = false
+    pcall(vim.fn.bufload, bufnr)
+  end
+  return bufnr
+end
+
 -- ============================================================================
 -- Create
 -- ============================================================================
@@ -479,8 +493,9 @@ function M.update(tabpage, session_config, auto_scroll_to_first_hunk)
       return
     end
 
-    -- Guard: Check if buffers are still valid
-    if not vim.api.nvim_buf_is_valid(original_info.bufnr) or not vim.api.nvim_buf_is_valid(modified_info.bufnr) then
+    -- Guard: Check if buffers are still valid (bufnr can be nil when an
+    -- earlier load failed)
+    if not (original_info.bufnr and vim.api.nvim_buf_is_valid(original_info.bufnr)) or not (modified_info.bufnr and vim.api.nvim_buf_is_valid(modified_info.bufnr)) then
       return
     end
 
@@ -598,9 +613,7 @@ function M.update(tabpage, session_config, auto_scroll_to_first_hunk)
           original_info.bufnr = vim.api.nvim_get_current_buf()
         end
       else
-        local bufnr = vim.fn.bufadd(original_info.target)
-        vim.fn.bufload(bufnr)
-        original_info.bufnr = bufnr
+        original_info.bufnr = load_real_file(original_info.target)
         vim.api.nvim_win_set_buf(original_win, original_info.bufnr)
       end
     else
@@ -617,9 +630,7 @@ function M.update(tabpage, session_config, auto_scroll_to_first_hunk)
           vim.cmd("edit! " .. vim.fn.fnameescape(original_info.target))
           original_info.bufnr = vim.api.nvim_get_current_buf()
         else
-          local bufnr = vim.fn.bufadd(original_info.target)
-          vim.fn.bufload(bufnr)
-          original_info.bufnr = bufnr
+          original_info.bufnr = load_real_file(original_info.target)
           vim.api.nvim_win_set_buf(original_win, original_info.bufnr)
         end
       end
@@ -638,9 +649,7 @@ function M.update(tabpage, session_config, auto_scroll_to_first_hunk)
           modified_info.bufnr = vim.api.nvim_get_current_buf()
         end
       else
-        local bufnr = vim.fn.bufadd(modified_info.target)
-        vim.fn.bufload(bufnr)
-        modified_info.bufnr = bufnr
+        modified_info.bufnr = load_real_file(modified_info.target)
         vim.api.nvim_win_set_buf(modified_win, modified_info.bufnr)
       end
     else
@@ -657,9 +666,7 @@ function M.update(tabpage, session_config, auto_scroll_to_first_hunk)
           vim.cmd("edit! " .. vim.fn.fnameescape(modified_info.target))
           modified_info.bufnr = vim.api.nvim_get_current_buf()
         else
-          local bufnr = vim.fn.bufadd(modified_info.target)
-          vim.fn.bufload(bufnr)
-          modified_info.bufnr = bufnr
+          modified_info.bufnr = load_real_file(modified_info.target)
           vim.api.nvim_win_set_buf(modified_win, modified_info.bufnr)
         end
       end
@@ -824,13 +831,6 @@ local function show_single_file(tabpage, opts)
   if keep_win and vim.api.nvim_win_is_valid(keep_win) then
     welcome_window.sync_later(keep_win)
   end
-end
-
--- Load a real file from disk, return bufnr
-local function load_real_file(file_path)
-  local bufnr = vim.fn.bufadd(file_path)
-  vim.fn.bufload(bufnr)
-  return bufnr
 end
 
 -- Load a virtual file from git revision, return bufnr
