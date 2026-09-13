@@ -32,6 +32,40 @@ local STATUS_SYMBOLS = {
   ["!"] = { symbol = "!", color = "CodeDiffStatusConflict" },
 }
 
+-- Longest prefix of `s` that fits `width` display cells
+local function fit_display_left(s, width)
+  local out = vim.fn.strcharpart(s, 0, math.min(vim.fn.strchars(s), width))
+  while out ~= "" and vim.fn.strdisplaywidth(out) > width do
+    out = vim.fn.strcharpart(out, 0, vim.fn.strchars(out) - 1)
+  end
+  return out
+end
+
+-- Longest suffix of `s` that fits `width` display cells
+local function fit_display_right(s, width)
+  local n = vim.fn.strchars(s)
+  local keep = math.min(n, width)
+  local out = vim.fn.strcharpart(s, n - keep, keep)
+  while out ~= "" and vim.fn.strdisplaywidth(out) > width do
+    out = vim.fn.strcharpart(out, 1, vim.fn.strchars(out) - 1)
+  end
+  return out
+end
+
+-- Truncate the middle of `s` to `width` display cells, keeping both ends
+-- (the tail usually carries the distinguishing suffix and the extension)
+local function truncate_middle(s, width)
+  if vim.fn.strdisplaywidth(s) <= width then
+    return s
+  end
+  if width <= 1 then
+    return fit_display_left(s, width)
+  end
+  local head_w = math.floor((width - 1) / 2)
+  local tail_w = width - 1 - head_w
+  return fit_display_left(s, head_w) .. "…" .. fit_display_right(s, tail_w)
+end
+
 -- Indent marker characters (neo-tree style)
 local INDENT_MARKERS = {
   edge = "│", -- Vertical line for non-last items
@@ -413,6 +447,14 @@ function M.prepare_node(node, max_width, selected_path, selected_group, tabpage)
         directory = ""
         space_len = 0
       end
+    end
+
+    -- A filename longer than the row itself would push the status symbol
+    -- past the window edge; truncate its middle so M/A/D stays visible.
+    if vim.fn.strdisplaywidth(filename) > available_for_content then
+      directory = ""
+      space_len = 0
+      filename = truncate_middle(filename, math.max(available_for_content, 1))
     end
 
     -- Append filename (normal weight) and directory (dimmed)
