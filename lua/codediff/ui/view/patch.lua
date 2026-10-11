@@ -108,12 +108,16 @@ end
 ---Build the patch buffer content for a list of entries.
 ---@param entries PatchEntry[]
 ---@param context number context lines around each hunk
+---@param opts? { split?: boolean } split builds the side-by-side pair (M.build_split)
 ---@return table { lines, marks, sections, origin }
 ---  marks[i]     = { line, col?, end_col?, hl, eol?, priority }  (0-based, end_col exclusive)
 ---  sections[i]  = { file, entry, first, last, hunks = { { first, last } } }  (1-based buffer lines)
 ---  origin[lnum] = { section = i, land = modified line to open the file at,
 ---                   side = "original"|"modified"|nil, lnum = file line on that side }
-function M.build(entries, context)
+function M.build(entries, context, opts)
+  if opts and opts.split then
+    return M.build_split(entries, context)
+  end
   local lines, marks, sections, origin = {}, {}, {}, {}
   local line_priority = config.options.diff.highlight_priority
 
@@ -209,6 +213,124 @@ function M.build(entries, context)
   end
 
   return { lines = lines, marks = marks, sections = sections, origin = origin }
+end
+
+---Build the side-by-side patch: the original side's lines for the left
+---buffer, the modified side's for the right, row-aligned (a changed block
+---is padded with filler rows on its shorter side), so one row index means
+---the same place in both buffers and one line map serves both.
+---@param entries PatchEntry[]
+---@param context number context lines around each hunk
+---@return table { split = true, lines, marks, left_lines, left_marks, sections, origin }
+---  lines/marks are the right (modified) buffer, left_lines/left_marks the
+---  left (original) one; marks with `filler = true` are padding rows.
+---  origin[row] = { section, land, original = file line?, modified = file line? }
+function M.build_split(entries, context)
+  local lines, marks, left_lines, left_marks = {}, {}, {}, {}
+  local sections, origin = {}, {}
+  local line_priority = config.options.diff.highlight_priority
+
+  local function emit(left, right, section, land, olnum, mlnum)
+    left_lines[#left_lines + 1] = left or ""
+    lines[#lines + 1] = right or ""
+    local row = #lines
+    origin[row] = { section = section, land = land, original = olnum, modified = mlnum }
+    if not left then
+      left_marks[#left_marks + 1] = { line = row - 1, filler = true }
+    end
+    if not right then
+      marks[#marks + 1] = { line = row - 1, filler = true }
+    end
+    return row
+  end
+
+  local function mark_row(row, hl)
+    left_marks[#left_marks + 1] = { line = row - 1, hl = hl, eol = true, priority = line_priority }
+    marks[#marks + 1] = { line = row - 1, hl = hl, eol = true, priority = line_priority }
+  end
+
+  local function mark_side(side_marks, row, hl, ranges, char_hl)
+    side_marks[#side_marks + 1] = { line = row - 1, hl = hl, eol = true, priority = line_priority }
+    for _, r in ipairs(ranges) do
+      side_marks[#side_marks + 1] = { line = row - 1, col = r[1], end_col = r[2], hl = char_hl, priority = line_priority + 100 }
+    end
+  end
+
+  for index, entry in ipairs(entries) do
+    if index > 1 then
+      emit("", "", index - 1)
+    end
+    local section = { file = entry.file, entry = entry, hunks = {} }
+    sections[index] = section
+    local header = header_text(entry.file)
+    section.first = emit(header, header, index)
+    mark_row(section.first, "CodeDiffPatchHeader")
+
+    if entry.note then
+      mark_row(emit("   " .. entry.note, "   " .. entry.note, index), "CodeDiffPatchNote")
+    end
+
+    local original, modified = entry.original, entry.modified
+    local changes = (entry.diff and entry.diff.changes) or {}
+
+    -- Unchanged lines, each side from its own file (they differ when
+    -- trimmed whitespace is ignored).
+    local function emit_context(ofrom, mfrom, count)
+      for k = 0, count - 1 do
+        emit(original[ofrom + k] or "", modified[mfrom + k] or "", index, mfrom + k, ofrom + k, mfrom + k)
+      end
+    end
+
+    for _, group in ipairs(group_changes(changes, context)) do
+      local first, last = group[1], group[#group]
+      local before = math.min(context, first.modified.start_line - 1, first.original.start_line - 1)
+      local after = math.min(context, #modified - (last.modified.end_line - 1), #original - (last.original.end_line - 1))
+      local orig_count = before + after + (last.original.end_line - first.original.start_line)
+      local mod_count = before + after + (last.modified.end_line - first.modified.start_line)
+      local orig_start = first.original.start_line - before
+      local mod_start = first.modified.start_line - before
+      if orig_count == 0 then
+        orig_start = orig_start - 1
+      end
+      if mod_count == 0 then
+        mod_start = mod_start - 1
+      end
+      local hunk_header = string.format("@@ -%d,%d +%d,%d @@", orig_start, orig_count, mod_start, mod_count)
+      mark_row(emit(hunk_header, hunk_header, index, first.modified.start_line), "CodeDiffPatchHunk")
+
+      emit_context(first.original.start_line - before, first.modified.start_line - before, before)
+      for i, change in ipairs(group) do
+        if i > 1 then
+          local prev = group[i - 1]
+          emit_context(prev.original.end_line, prev.modified.end_line, change.modified.start_line - prev.modified.end_line)
+        end
+        local o, m = change.original, change.modified
+        local removed, added = o.end_line - o.start_line, m.end_line - m.start_line
+        local hunk = { first = #lines + 1 }
+        for k = 1, math.max(removed, added) do
+          local olnum = k <= removed and o.start_line + k - 1 or nil
+          local mlnum = k <= added and m.start_line + k - 1 or nil
+          local otext = olnum and (original[olnum] or "") or nil
+          local mtext = mlnum and (modified[mlnum] or "") or nil
+          local row = emit(otext, mtext, index, mlnum or m.start_line, olnum, mlnum)
+          if otext then
+            mark_side(left_marks, row, "CodeDiffLineDelete", char_ranges(change.inner_changes, "original", olnum, otext), "CodeDiffCharDelete")
+          end
+          if mtext then
+            mark_side(marks, row, "CodeDiffLineInsert", char_ranges(change.inner_changes, "modified", mlnum, mtext), "CodeDiffCharInsert")
+          end
+        end
+        hunk.last = #lines
+        if hunk.last >= hunk.first then
+          section.hunks[#section.hunks + 1] = hunk
+        end
+      end
+      emit_context(last.original.end_line, last.modified.end_line, after)
+    end
+    section.last = #lines
+  end
+
+  return { split = true, lines = lines, marks = marks, left_lines = left_lines, left_marks = left_marks, sections = sections, origin = origin }
 end
 
 -- Synthetic diff result so ]c/[c (navigation.lua) walk the hunks of the
@@ -521,18 +643,48 @@ function M.is_active(tabpage)
   return get_state(tabpage or vim.api.nvim_get_current_tabpage()) ~= nil
 end
 
--- The diff window while it shows the patch buffer.
-local function patch_window(state)
+-- The diff windows while they show the patch buffers: the modified (right)
+-- one first, then the original (left) one of the side-by-side patch.
+local function patch_windows(state)
   local session = lifecycle.get_session(state.tabpage)
-  local win = session and session.modified_win
-  if win and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == state.bufnr then
-    return win
+  local wins = {}
+  for _, pair in ipairs({ { session and session.modified_win, state.bufnr }, { session and session.original_win, state.left_bufnr } }) do
+    local win, bufnr = pair[1], pair[2]
+    if bufnr and win and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == bufnr then
+      wins[#wins + 1] = win
+    end
   end
-  return nil
+  return wins
+end
+
+local function patch_window(state)
+  return patch_windows(state)[1]
+end
+
+-- The patch window holding the cursor, else the modified one.
+local function cursor_window(state)
+  local current = vim.api.nvim_get_current_win()
+  for _, win in ipairs(patch_windows(state)) do
+    if win == current then
+      return win
+    end
+  end
+  return patch_window(state)
+end
+
+-- Rows line up in the side-by-side patch: put the other pane's cursor on the
+-- same row as `win`'s, so switching panes keeps the place.
+local function align_cursors(state, win)
+  local row = vim.api.nvim_win_get_cursor(win)[1]
+  for _, other in ipairs(patch_windows(state)) do
+    if other ~= win and vim.api.nvim_win_get_cursor(other)[1] ~= row then
+      pcall(vim.api.nvim_win_set_cursor, other, { row, 0 })
+    end
+  end
 end
 
 local function section_at_cursor(state)
-  local win = patch_window(state)
+  local win = cursor_window(state)
   if not win then
     return nil
   end
@@ -571,6 +723,7 @@ local function jump_to(state, file)
   vim.api.nvim_win_call(win, function()
     vim.cmd("normal! zt")
   end)
+  align_cursors(state, win)
 end
 
 -- Where the cursor is (file + offset into its section) so a rebuild can put
@@ -611,53 +764,98 @@ local function restore_cursor(state, anchor)
       vim.cmd("normal! zt")
     end
   end)
+  align_cursors(state, win)
   M.follow_cursor(state.tabpage)
 end
 
-local function render(state, built)
-  local bufnr = state.bufnr
-  if not vim.api.nvim_buf_is_valid(bufnr) then
-    return
-  end
-  vim.bo[bufnr].modifiable = true
-  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, built.lines)
-  vim.bo[bufnr].modifiable = false
-  vim.api.nvim_buf_clear_namespace(bufnr, M.ns, 0, -1)
-
-  -- Syntax colors sit just below the diff line highlights so a syntax group
-  -- that defines a background cannot hide the insert/delete tint.
+-- Syntax colors of each side's file content, added to `targets[side]` (the
+-- mark list of the buffer showing that side). They sit just below the diff
+-- line highlights so a syntax group that defines a background cannot hide
+-- the insert/delete tint.
+local function add_syntax(built, targets)
   local syntax_priority = config.options.diff.highlight_priority - 1
-  local marks = built.marks
   for index, section in ipairs(built.sections) do
     local entry = section.entry
     if entry.filetype then
       local wanted = { original = {}, modified = {} }
-      for lnum = section.first, section.last do
-        local o = built.origin[lnum]
-        if o and o.section == index and o.side then
-          wanted[o.side][o.lnum] = wanted[o.side][o.lnum] or (lnum - 1)
+      for row = section.first, section.last do
+        local o = built.origin[row]
+        if o and o.section == index then
+          if built.split then
+            for _, side in ipairs({ "original", "modified" }) do
+              if o[side] then
+                wanted[side][o[side]] = wanted[side][o[side]] or (row - 1)
+              end
+            end
+          elseif o.side then
+            wanted[o.side][o.lnum] = wanted[o.side][o.lnum] or (row - 1)
+          end
         end
       end
       for side, lines in pairs({ original = entry.original, modified = entry.modified }) do
         for _, m in ipairs(syntax_marks(lines, entry.filetype, wanted[side], syntax_priority)) do
-          marks[#marks + 1] = m
+          table.insert(targets[side], m)
         end
       end
     end
   end
+end
 
-  for _, m in ipairs(marks) do
-    pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns, m.line, m.col or 0, {
-      end_row = m.eol and (m.line + 1) or nil,
-      end_col = m.eol and 0 or m.end_col,
-      hl_group = m.hl,
-      hl_eol = m.eol or nil,
-      priority = m.priority,
-    })
+-- Filler rows of the side-by-side patch show the same pattern as the
+-- regular view's virtual filler lines.
+local function filler_text()
+  local text = config.options.diff.filler_text or ""
+  if text == "" then
+    return ""
   end
+  return string.rep(text, math.ceil(500 / math.max(1, vim.fn.strwidth(text))))
+end
+
+local function paint(bufnr, lines, marks)
+  vim.bo[bufnr].modifiable = true
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+  vim.bo[bufnr].modifiable = false
+  vim.api.nvim_buf_clear_namespace(bufnr, M.ns, 0, -1)
+  local filler = filler_text()
+  for _, m in ipairs(marks) do
+    if m.filler then
+      if filler ~= "" then
+        pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns, m.line, 0, {
+          virt_text = { { filler, "CodeDiffFiller" } },
+          virt_text_pos = "overlay",
+        })
+      end
+    else
+      pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns, m.line, m.col or 0, {
+        end_row = m.eol and (m.line + 1) or nil,
+        end_col = m.eol and 0 or m.end_col,
+        hl_group = m.hl,
+        hl_eol = m.eol or nil,
+        priority = m.priority,
+      })
+    end
+  end
+end
+
+local function render(state, built)
+  if not vim.api.nvim_buf_is_valid(state.bufnr) then
+    return
+  end
+  if built.split then
+    add_syntax(built, { original = built.left_marks, modified = built.marks })
+    if state.left_bufnr and vim.api.nvim_buf_is_valid(state.left_bufnr) then
+      paint(state.left_bufnr, built.left_lines, built.left_marks)
+    end
+  else
+    add_syntax(built, { original = built.marks, modified = built.marks })
+  end
+  paint(state.bufnr, built.lines, built.marks)
 
   state.sections, state.origin = built.sections, built.origin
   lifecycle.update_diff_result(state.tabpage, synthetic_diff(built))
+  if state.split then
+    require("codediff.ui.scroll").refresh(state.tabpage)
+  end
 end
 
 -- Reload every file and redraw the buffer, keeping the cursor on the same
@@ -677,7 +875,7 @@ function M.rebuild(tabpage)
       return
     end
     local ok, err = xpcall(function()
-      render(state, M.build(entries, config.options.diff.compact_context_lines))
+      render(state, M.build(entries, config.options.diff.compact_context_lines, { split = state.split }))
       restore_cursor(state, anchor)
     end, debug.traceback)
     if not ok then
@@ -769,30 +967,73 @@ local function apply_keymaps(state)
     diff_put = "diff put",
     align_move = "move alignment",
   }
-  for name, what in pairs(unavailable_here) do
-    map(km[name], unavailable(what), what .. " (patch view)", state.bufnr)
+  local patch_buffers = { state.bufnr, state.left_bufnr }
+  for _, bufnr in pairs(patch_buffers) do
+    for name, what in pairs(unavailable_here) do
+      map(km[name], unavailable(what), what .. " (patch view)", bufnr)
+    end
+    map(ekm.select, function()
+      M.open_at_cursor(state.tabpage)
+    end, "Open this file's diff at this line", bufnr)
+    map(km.open_in_prev_tab, function()
+      M.open_in_prev_tab(state.tabpage)
+    end, "Open file in previous tab", bufnr)
   end
   -- Layout and compact toggles are tab-wide, so the explorer needs them too.
-  for _, bufnr in ipairs({ state.bufnr, state.explorer.bufnr }) do
-    map(km.toggle_layout, unavailable("the layout toggle"), "Toggle layout (patch view)", bufnr)
+  for _, bufnr in pairs({ state.bufnr, state.left_bufnr, state.explorer.bufnr }) do
+    map(km.toggle_layout, function()
+      M.toggle_layout(state.tabpage)
+    end, "Toggle patch layout (side-by-side / inline)", bufnr)
     map(km.toggle_compact, unavailable("compact mode"), "Toggle compact (patch view)", bufnr)
   end
-
-  map(ekm.select, function()
-    M.open_at_cursor(state.tabpage)
-  end, "Open this file's diff at this line", state.bufnr)
-  map(km.open_in_prev_tab, function()
-    M.open_in_prev_tab(state.tabpage)
-  end, "Open file in previous tab", state.bufnr)
 end
 
 -- ============================================================================
 -- Enable / disable
 -- ============================================================================
 
+-- Two diff windows for the side-by-side patch: the panes the per-file view
+-- left, or its single pane (added/deleted file, inline layout) plus a new
+-- split for the original side.
+local function ensure_split_windows(tabpage, session)
+  local orig, mod = session.original_win, session.modified_win
+  local orig_ok = orig and vim.api.nvim_win_is_valid(orig)
+  local mod_ok = mod and vim.api.nvim_win_is_valid(mod)
+  if not (orig_ok and mod_ok and orig ~= mod) then
+    local keep = (mod_ok and mod) or (orig_ok and orig) or nil
+    if not keep then
+      return false
+    end
+    local current = vim.api.nvim_get_current_win()
+    vim.api.nvim_set_current_win(keep)
+    vim.cmd(config.options.diff.original_position == "right" and "rightbelow vsplit" or "leftabove vsplit")
+    local created = vim.api.nvim_get_current_win()
+    vim.w[created].codediff_restore = 1
+    session.original_win, session.modified_win = created, keep
+    vim.api.nvim_set_current_win(vim.api.nvim_win_is_valid(current) and current ~= keep and current or keep)
+  end
+  session.single_pane = nil
+  lifecycle.update_layout(tabpage, "side-by-side")
+  return true
+end
+
+local function patch_buffer(name)
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.bo[bufnr].buftype = "nofile"
+  vim.bo[bufnr].bufhidden = "wipe"
+  vim.bo[bufnr].swapfile = false
+  vim.bo[bufnr].modifiable = false
+  vim.bo[bufnr].filetype = "codediff-patch"
+  pcall(vim.api.nvim_buf_set_name, bufnr, name)
+  return bufnr
+end
+
+---Show the patch view: side by side (original files' lines left, modified
+---right) unless the session uses the inline layout.
 ---@param tabpage? number
+---@param opts? { prev?: table } state to restore on disable (toggle_layout carries it over)
 ---@return boolean
-function M.enable(tabpage)
+function M.enable(tabpage, opts)
   tabpage = tabpage or vim.api.nvim_get_current_tabpage()
   local session = lifecycle.get_session(tabpage)
   local explorer = lifecycle.get_explorer(tabpage)
@@ -813,17 +1054,23 @@ function M.enable(tabpage)
   end
 
   setup_highlights()
-  local prev = {
-    layout = session.layout,
-    compact = session.compact_mode,
-    compact_default_applied = session.compact_default_applied,
-    reapply_keymaps = session.reapply_keymaps,
-  }
+  local prev = opts and opts.prev
+    or {
+      layout = session.layout,
+      compact = session.compact_mode,
+      compact_default_applied = session.compact_default_applied,
+      reapply_keymaps = session.reapply_keymaps,
+    }
   local compact = require("codediff.ui.view.compact")
   if session.compact_mode then
     compact.disable(tabpage)
   end
-  if session.layout ~= "inline" and not require("codediff.ui.view.toggle").normalize_inline_layout(tabpage) then
+  local split = session.layout ~= "inline"
+  if split then
+    if not ensure_split_windows(tabpage, session) then
+      return false
+    end
+  elseif not require("codediff.ui.view.toggle").normalize_inline_layout(tabpage) then
     return false
   end
   local win = session.modified_win
@@ -840,39 +1087,52 @@ function M.enable(tabpage)
     end
   end
 
-  local bufnr = vim.api.nvim_create_buf(false, true)
-  vim.bo[bufnr].buftype = "nofile"
-  vim.bo[bufnr].bufhidden = "wipe"
-  vim.bo[bufnr].swapfile = false
-  vim.bo[bufnr].modifiable = false
-  vim.bo[bufnr].filetype = "codediff-patch"
-  pcall(vim.api.nvim_buf_set_name, bufnr, "CodeDiff Patch [" .. tabpage .. "]")
+  local bufnr = patch_buffer("CodeDiff Patch [" .. tabpage .. "]")
+  local left_bufnr = split and patch_buffer("CodeDiff Patch Original [" .. tabpage .. "]") or nil
   local empty_buf = vim.api.nvim_create_buf(false, true)
   vim.bo[empty_buf].buftype = "nofile"
 
-  vim.api.nvim_win_set_buf(win, bufnr)
-  require("codediff.ui.view.welcome_window").sync(win)
-  vim.wo[win].wrap = false
-  vim.wo[win].cursorline = true
+  local shown = { { win, bufnr } }
+  if split then
+    shown[2] = { session.original_win, left_bufnr }
+  end
+  for _, pair in ipairs(shown) do
+    vim.api.nvim_win_set_buf(pair[1], pair[2])
+    require("codediff.ui.view.welcome_window").sync(pair[1])
+    vim.wo[pair[1]].wrap = false
+    vim.wo[pair[1]].cursorline = true
+  end
 
   local path = require("codediff.core.path")
+  local orig_side = left_bufnr or empty_buf
   session.single_side = nil
-  lifecycle.update_buffers(tabpage, empty_buf, bufnr)
+  lifecycle.update_buffers(tabpage, orig_side, bufnr)
   lifecycle.update_paths(tabpage, path.empty(), path.empty())
   lifecycle.update_revisions(tabpage, nil, nil)
   lifecycle.update_diff_result(tabpage, { changes = {}, moves = {} })
-  lifecycle.update_changedtick(tabpage, vim.api.nvim_buf_get_changedtick(empty_buf), vim.api.nvim_buf_get_changedtick(bufnr))
+  lifecycle.update_changedtick(tabpage, vim.api.nvim_buf_get_changedtick(orig_side), vim.api.nvim_buf_get_changedtick(bufnr))
   -- compact.refresh() runs after every keymap setup; keep it from folding
   -- the patch buffer on behalf of the "open in compact mode" default.
   session.compact_default_applied = true
 
-  local state = { tabpage = tabpage, bufnr = bufnr, empty_bufnr = empty_buf, explorer = explorer, prev = prev, sections = {}, origin = {}, generation = 0 }
+  local state = {
+    tabpage = tabpage,
+    bufnr = bufnr,
+    left_bufnr = left_bufnr,
+    split = split,
+    empty_bufnr = empty_buf,
+    explorer = explorer,
+    prev = prev,
+    sections = {},
+    origin = {},
+    generation = 0,
+  }
   session.patch = state
 
   -- Keymaps: the regular view set (quit, ]c/[c, ]f/[f, explorer toggles, help,
   -- ...) plus the patch-specific overrides, re-applied whenever the session
   -- re-applies its own (TabEnter).
-  require("codediff.ui.view.keymaps").setup_all_keymaps(tabpage, empty_buf, bufnr, true)
+  require("codediff.ui.view.keymaps").setup_all_keymaps(tabpage, orig_side, bufnr, true)
   apply_keymaps(state)
   session.reapply_keymaps = function()
     if prev.reapply_keymaps then
@@ -884,23 +1144,31 @@ function M.enable(tabpage)
   end
 
   local group = vim.api.nvim_create_augroup(augroup_name(tabpage), { clear = true })
-  vim.api.nvim_create_autocmd("CursorMoved", {
-    group = group,
-    buffer = bufnr,
-    callback = function()
-      M.follow_cursor(tabpage)
-    end,
-  })
-  vim.api.nvim_create_autocmd("BufWipeout", {
-    group = group,
-    buffer = bufnr,
-    callback = function()
-      if session.patch == state then
-        M.disable(tabpage, { rerender = false })
-      end
-    end,
-  })
+  for _, pair in ipairs(shown) do
+    vim.api.nvim_create_autocmd("CursorMoved", {
+      group = group,
+      buffer = pair[2],
+      callback = function()
+        M.follow_cursor(tabpage)
+        if split then
+          align_cursors(state, vim.api.nvim_get_current_win())
+        end
+      end,
+    })
+    vim.api.nvim_create_autocmd("BufWipeout", {
+      group = group,
+      buffer = pair[2],
+      callback = function()
+        if session.patch == state then
+          M.disable(tabpage, { rerender = false })
+        end
+      end,
+    })
+  end
 
+  if split then
+    require("codediff.ui.scroll").bind(tabpage, { session.original_win, session.modified_win })
+  end
   require("codediff.ui.layout").arrange(tabpage)
   M.rebuild(tabpage)
   return true
@@ -935,7 +1203,9 @@ function M.disable(tabpage, opts)
     return true
   end
 
-  if state.prev.layout == "side-by-side" then
+  -- The side-by-side patch already holds both panes; the file's diff takes
+  -- them over as they are.
+  if state.prev.layout == "side-by-side" and not state.split then
     require("codediff.ui.view.toggle").normalize_side_by_side_layout(tabpage)
   end
   local explorer_module = require("codediff.ui.explorer")
@@ -969,6 +1239,23 @@ function M.toggle(tabpage)
     return M.disable(tabpage)
   end
   return M.enable(tabpage)
+end
+
+---Switch the patch view between side-by-side and inline. Leaving the patch
+---view afterwards keeps the layout picked here.
+---@param tabpage? number
+---@return boolean
+function M.toggle_layout(tabpage)
+  tabpage = tabpage or vim.api.nvim_get_current_tabpage()
+  local state = get_state(tabpage)
+  if not state then
+    return false
+  end
+  local prev = state.prev
+  M.disable(tabpage, { rerender = false })
+  lifecycle.update_layout(tabpage, state.split and "inline" or "side-by-side")
+  prev.layout = state.split and "inline" or "side-by-side"
+  return M.enable(tabpage, { prev = prev })
 end
 
 -- ============================================================================

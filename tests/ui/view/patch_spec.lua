@@ -176,6 +176,49 @@ describe("patch view", function()
       assert.are.same({ "CodeDiffPatchNote" }, marks_on(built, 2))
       assert.are.same({}, built.sections[1].hunks)
     end)
+
+    it("builds row-aligned sides for the side-by-side patch, padding the shorter side", function()
+      local original = { "l1", "l2", "old a", "old b", "l5", "l6" }
+      local modified = { "l1", "l2", "new a", "l5", "l6", "added" }
+      local built = patch.build({ entry("a.txt", original, modified) }, 1, { split = true })
+
+      assert.is_true(built.split)
+      assert.are.equal(#built.lines, #built.left_lines)
+      -- Two lines apart with one context line: both changes share a hunk
+      assert.are.same({ "M  a.txt", "@@ -2,5 +2,5 @@", "l2", "old a", "old b", "l5" }, vim.list_slice(built.left_lines, 1, 6))
+      assert.are.same({ "M  a.txt", "@@ -2,5 +2,5 @@", "l2", "new a", "", "l5" }, vim.list_slice(built.lines, 1, 6))
+      -- The removed line without a partner is a filler row on the right
+      local fillers = {}
+      for _, m in ipairs(built.marks) do
+        if m.filler then
+          fillers[#fillers + 1] = m.line + 1
+        end
+      end
+      assert.are.same({ 5 }, vim.list_slice(fillers, 1, 1))
+      local left_hls, right_hls = {}, {}
+      for _, m in ipairs(built.left_marks) do
+        if m.line == 3 and m.hl then
+          left_hls[#left_hls + 1] = m.hl
+        end
+      end
+      for _, m in ipairs(built.marks) do
+        if m.line == 3 and m.hl then
+          right_hls[#right_hls + 1] = m.hl
+        end
+      end
+      assert.is_truthy(vim.tbl_contains(left_hls, "CodeDiffLineDelete"))
+      assert.is_truthy(vim.tbl_contains(right_hls, "CodeDiffLineInsert"))
+      -- One row map for both sides; the change is one hunk across its rows
+      assert.are.same({ section = 1, land = 3, original = 4, modified = nil }, built.origin[5])
+      assert.are.same({ section = 1, land = 3, original = 3, modified = 3 }, built.origin[4])
+      assert.are.same({ section = 1, land = 4, original = 5, modified = 4 }, built.origin[6])
+      assert.are.same({ first = 4, last = 5 }, built.sections[1].hunks[1])
+      -- The pure insertion at the end: filler on the left, its own hunk
+      local last = #built.lines
+      assert.are.equal("added", built.lines[last])
+      assert.are.equal("", built.left_lines[last])
+      assert.are.same({ first = last, last = last }, built.sections[1].hunks[2])
+    end)
   end)
 
   -- ==========================================================================
@@ -228,6 +271,8 @@ describe("patch view", function()
 
     it("lists every file in explorer order in one buffer", function()
       local tabpage, session = open_explorer()
+      require("codediff.ui.view.toggle").toggle(tabpage)
+      assert.are.equal("inline", session.layout)
       assert.is_true(patch.enable(tabpage))
       local state = wait_for_patch(tabpage)
 
@@ -364,6 +409,83 @@ describe("patch view", function()
 
       assert.is_true(patch.toggle(tabpage))
       assert.is_false(patch.is_active(tabpage))
+    end)
+
+    local function diff_windows(tabpage, explorer)
+      local wins = {}
+      for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tabpage)) do
+        if win ~= explorer.winid and vim.api.nvim_win_get_config(win).relative == "" then
+          wins[#wins + 1] = win
+        end
+      end
+      return wins
+    end
+
+    it("shows the side-by-side patch in the side-by-side layout, rows aligned", function()
+      local tabpage, session, explorer = open_explorer()
+      assert.are.equal("side-by-side", session.layout)
+      assert.is_true(patch.enable(tabpage))
+      local state = wait_for_patch(tabpage)
+
+      assert.is_true(state.split)
+      assert.are.equal("side-by-side", session.layout)
+      assert.are.equal(state.left_bufnr, vim.api.nvim_win_get_buf(session.original_win))
+      assert.are.equal(state.bufnr, vim.api.nvim_win_get_buf(session.modified_win))
+      assert.are.equal(2, #diff_windows(tabpage, explorer))
+      local left = vim.api.nvim_buf_get_lines(state.left_bufnr, 0, -1, false)
+      local right = patch_lines(state)
+      assert.are.equal(#right, #left)
+      local row = index_of(right, "a1 EDIT")
+      assert.are.equal("a1", left[row])
+      assert.are.equal("deleted", left[index_of(left, "deleted")])
+      assert.are.equal("", right[index_of(left, "deleted")])
+      assert.are.equal("", left[index_of(right, "untracked")])
+
+      -- The cursor in the left pane follows the explorer and the right pane
+      vim.api.nvim_set_current_win(session.original_win)
+      vim.api.nvim_win_set_cursor(session.original_win, { state.sections[2].first + 1, 0 })
+      vim.api.nvim_exec_autocmds("CursorMoved", { buffer = state.left_bufnr })
+      assert.are.equal("b.txt", explorer.current_file_path)
+      assert.are.equal(state.sections[2].first + 1, vim.api.nvim_win_get_cursor(session.modified_win)[1])
+
+      -- ]c walks the hunks from the left pane too
+      vim.api.nvim_win_set_cursor(session.original_win, { 1, 0 })
+      assert.is_true(nav.next_hunk())
+      assert.are.equal(state.sections[1].hunks[1].first, vim.api.nvim_win_get_cursor(0)[1])
+    end)
+
+    it("switches the patch between side-by-side and inline with the layout toggle", function()
+      local tabpage, session, explorer = open_explorer()
+      assert.is_true(patch.enable(tabpage))
+      wait_for_patch(tabpage)
+
+      assert.is_true(patch.toggle_layout(tabpage))
+      local state = wait_for_patch(tabpage)
+      assert.is_false(state.split)
+      assert.are.equal("inline", session.layout)
+      assert.are.equal(1, #diff_windows(tabpage, explorer))
+      assert.are.equal(state.bufnr, vim.api.nvim_win_get_buf(session.modified_win))
+
+      assert.is_true(patch.toggle_layout(tabpage))
+      state = wait_for_patch(tabpage)
+      assert.is_true(state.split)
+      assert.are.equal(2, #diff_windows(tabpage, explorer))
+      assert.are.equal(state.left_bufnr, vim.api.nvim_win_get_buf(session.original_win))
+
+      -- Leaving keeps two panes, no third one
+      patch.disable(tabpage)
+      local ok = vim.wait(8000, function()
+        local mod_buf = session.modified_bufnr
+        return mod_buf
+          and vim.api.nvim_buf_is_valid(mod_buf)
+          and vim.api.nvim_buf_get_name(mod_buf):match("%.txt$") ~= nil
+          and session.original_win ~= session.modified_win
+          and vim.api.nvim_win_get_buf(session.original_win) ~= state.left_bufnr
+      end, 50)
+      assert.is_true(ok, "per-file diff did not come back")
+      assert.are.equal(2, #diff_windows(tabpage, explorer))
+      assert.are.equal("side-by-side", session.layout)
+      assert.is_false(vim.api.nvim_buf_is_valid(state.left_bufnr), "left patch buffer should be wiped")
     end)
   end)
 end)
